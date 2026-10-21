@@ -10,7 +10,7 @@ import ExrLoader from './ExrLoader';
 import PsdLoader from './PSDLoader';
 import { generateThumbnailUsingWorker } from './ThumbnailGeneration';
 import TifLoader from './TifLoader';
-import { generateThumbnail, getBlob } from './util';
+import { generateThumbnail, generateVideoThumbnail, getBlob, getVideoDimensions } from './util';
 
 type FormatHandlerType =
   | 'web'
@@ -18,6 +18,7 @@ type FormatHandlerType =
   | 'exrLoader'
   | 'psdLoader'
   | 'extractEmbeddedThumbnailOnly'
+  | 'video'
   | 'none';
 
 const FormatHandlers: Record<IMG_EXTENSIONS_TYPE, FormatHandlerType> = {
@@ -37,6 +38,7 @@ const FormatHandlers: Record<IMG_EXTENSIONS_TYPE, FormatHandlerType> = {
   kra: 'extractEmbeddedThumbnailOnly',
   // xcf: 'extractEmbeddedThumbnailOnly',
   exr: 'exrLoader',
+  mp4: 'video',
   // avif: 'sharp',
 };
 
@@ -131,6 +133,10 @@ class ImageLoader {
         await generateThumbnail(this.psdLoader, absolutePath, thumbnailPath, thumbnailMaxSize);
         updateThumbnailPath(file, thumbnailPath);
         break;
+      case 'video':
+        await generateVideoThumbnail(absolutePath, thumbnailPath, thumbnailMaxSize);
+        updateThumbnailPath(file, thumbnailPath);
+        break;
       case 'none':
         // No thumbnail for this format
         file.setThumbnailPath(file.absolutePath);
@@ -146,6 +152,7 @@ class ImageLoader {
     const handlerType = FormatHandlers[file.extension];
     switch (handlerType) {
       case 'web':
+      case 'video':
         return file.absolutePath;
       case 'tifLoader': {
         const src =
@@ -195,6 +202,11 @@ class ImageLoader {
       } catch (e) {}
     }
 
+    // Fall back to reading the resolution from the video stream itself
+    if (isVideo(absolutePath) && (dimensions.width === 0 || dimensions.height === 0)) {
+      return getVideoDimensions(absolutePath);
+    }
+
     return dimensions;
   }
 
@@ -228,6 +240,12 @@ class ImageLoader {
 }
 
 export default ImageLoader;
+
+/** Whether a file path or extension refers to a video format */
+export function isVideo(pathOrExtension: string): boolean {
+  const extension = pathOrExtension.slice(pathOrExtension.lastIndexOf('.') + 1).toLowerCase();
+  return (FormatHandlers as Record<string, FormatHandlerType | undefined>)[extension] === 'video';
+}
 
 // Update the thumbnail path to re-render the image where ever it is used in React
 const updateThumbnailPath = action((file: ClientFile, thumbnailPath: string) => {

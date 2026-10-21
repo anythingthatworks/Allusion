@@ -10,6 +10,7 @@ import { useStore } from '../../../contexts/StoreContext';
 import { ClientFile } from '../../../entities/File';
 import { useAction, useComputed } from '../../../hooks/mobx';
 import { usePromise } from '../../../hooks/usePromise';
+import { isVideo } from '../../../image/ImageLoader';
 import { UpscaleMode } from '../../../stores/UiStore';
 import Inspector from '../../Inspector';
 import { CommandDispatcher } from '../Commands';
@@ -122,16 +123,21 @@ const SlideView = observer(({ width, height }: SlideViewProps) => {
   useEffect(() => {
     let isEffectRunning = true;
     const dispose = autorun(() => {
-      if (!isLast.get() && uiStore.firstItem + 1 < fileStore.fileList.length) {
+      // Videos are streamed when opened, so they aren't preloaded
+      const nextFile = fileStore.fileList[uiStore.firstItem + 1];
+      if (
+        !isLast.get() &&
+        uiStore.firstItem + 1 < fileStore.fileList.length &&
+        !isVideo(nextFile.extension)
+      ) {
         const nextImg = new Image();
-        const nextFile = fileStore.fileList[uiStore.firstItem + 1];
         imageLoader
           .getImageSrc(nextFile)
           .then((src) => isEffectRunning && src && (nextImg.src = encodeFilePath(src)));
       }
-      if (!isFirst.get() && fileStore.fileList.length > 0) {
+      const prevFile = fileStore.fileList[uiStore.firstItem - 1];
+      if (!isFirst.get() && fileStore.fileList.length > 0 && !isVideo(prevFile.extension)) {
         const prevImg = new Image();
-        const prevFile = fileStore.fileList[uiStore.firstItem - 1];
         imageLoader
           .getImageSrc(prevFile)
           .then((src) => isEffectRunning && src && (prevImg.src = encodeFilePath(src)));
@@ -234,6 +240,18 @@ const ZoomableImage: React.FC<ZoomableImageProps> = ({
           const src = source.value.ok;
           const dimension = await new Promise<{ src: string; dimension: Vec2 }>(
             (resolve, reject) => {
+              if (isVideo(absolutePath)) {
+                const video = document.createElement('video');
+                video.preload = 'metadata';
+                video.onloadedmetadata = () => {
+                  resolve({ src, dimension: createDimension(video.videoWidth, video.videoHeight) });
+                  video.removeAttribute('src');
+                  video.load();
+                };
+                video.onerror = reject;
+                video.src = encodeFilePath(src);
+                return;
+              }
               const img = new Image();
               img.onload = function (this: any) {
                 // TODO: would be better to resolve once transition is complete: for large resolution images, the transition freezes for ~.4s bc of a re-paint task when the image changes
@@ -284,15 +302,30 @@ const ZoomableImage: React.FC<ZoomableImageProps> = ({
         onClose={onClose}
         upscaleMode={upscaleMode}
       >
-        {(props) => (
-          <img
-            {...props}
-            src={encodeFilePath(src)}
-            width={dimension[0]}
-            height={dimension[1]}
-            alt=""
-          />
-        )}
+        {(props) =>
+          // Like gifs, videos play silently on a loop. While the video isn't loaded yet, src is its thumbnail
+          isVideo(src) ? (
+            <video
+              {...(props as React.VideoHTMLAttributes<HTMLVideoElement>)}
+              src={encodeFilePath(src)}
+              width={dimension[0]}
+              height={dimension[1]}
+              autoPlay
+              muted
+              loop
+              playsInline
+              disablePictureInPicture
+            />
+          ) : (
+            <img
+              {...props}
+              src={encodeFilePath(src)}
+              width={dimension[0]}
+              height={dimension[1]}
+              alt=""
+            />
+          )
+        }
       </ZoomPan>
     );
   }

@@ -1,6 +1,7 @@
 import { clamp } from 'common/core';
 import fse from 'fs-extra';
 import { thumbnailFormat } from 'common/config';
+import { encodeFilePath } from 'common/fs';
 
 export interface Loader extends Decoder {
   init: () => Promise<void>;
@@ -43,6 +44,73 @@ export async function generateThumbnail(
     ),
   );
   return fse.writeFile(outputPath, Buffer.from(blobBuffer));
+}
+
+/** Loads a video's metadata in a detached video element */
+function loadVideo(path: string): Promise<HTMLVideoElement> {
+  return new Promise((resolve, reject) => {
+    const video = document.createElement('video');
+    video.muted = true;
+    video.preload = 'metadata';
+    video.onloadedmetadata = () => resolve(video);
+    video.onerror = () => reject(video.error ?? new Error('Could not load video ' + path));
+    video.src = encodeFilePath(path);
+  });
+}
+
+function unloadVideo(video: HTMLVideoElement) {
+  video.removeAttribute('src');
+  video.load();
+}
+
+/** Returns the resolution of a video, or 0 for width and height if it can't be determined */
+export async function getVideoDimensions(path: string): Promise<{ width: number; height: number }> {
+  try {
+    const video = await loadVideo(path);
+    const dimensions = { width: video.videoWidth, height: video.videoHeight };
+    unloadVideo(video);
+    return dimensions;
+  } catch (e) {
+    console.error('Could not read video dimensions from', path, e);
+    return { width: 0, height: 0 };
+  }
+}
+
+/** Generates a thumbnail from a frame near the start of a video */
+export async function generateVideoThumbnail(
+  inputPath: string,
+  outputPath: string,
+  thumbnailSize: number,
+): Promise<void> {
+  const video = await loadVideo(inputPath);
+  try {
+    // The first frames are often black: seek to 10% into the video, but at most 1 second
+    const seekTime = Number.isFinite(video.duration) ? Math.min(1, video.duration * 0.1) : 0;
+    await new Promise<void>((resolve, reject) => {
+      video.onseeked = () => resolve();
+      video.onerror = () => reject(video.error ?? new Error('Could not seek video ' + inputPath));
+      video.currentTime = seekTime;
+    });
+
+    const canvas = document.createElement('canvas');
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+    canvas.getContext('2d')!.drawImage(video, 0, 0);
+
+    const sampledCanvas = getSampledCanvas(canvas, thumbnailSize);
+    const quality = computeQuality(sampledCanvas, thumbnailSize);
+    const blobBuffer = await new Promise<ArrayBuffer>((resolve, reject) =>
+      sampledCanvas.toBlob(
+        (blob) => (blob !== null ? resolve(blob.arrayBuffer()) : reject()),
+        `image/${thumbnailFormat}`,
+        quality,
+      ),
+    );
+    await fse.writeFile(outputPath, Buffer.from(blobBuffer));
+  } finally {
+    unloadVideo(video);
+  }
 }
 
 function dataToCanvas(data: ImageData): HTMLCanvasElement {

@@ -10,6 +10,7 @@ import { useStore } from '../../contexts/StoreContext';
 import { ClientFile } from '../../entities/File';
 import { ClientTag } from '../../entities/Tag';
 import { usePromise } from '../../hooks/usePromise';
+import { isVideo } from '../../image/ImageLoader';
 import { CommandDispatcher, MousePointerEvent } from './Commands';
 import { ITransform } from './Masonry/layout-helpers';
 
@@ -98,7 +99,8 @@ export const Thumbnail = observer(({ file, mounted, forceNoThumbnail }: ItemProp
     isBroken,
     mounted,
     thumbnailPath,
-    uiStore.isList || !forceNoThumbnail,
+    // Videos can't be shown in an img element, so they always use their thumbnail
+    uiStore.isList || !forceNoThumbnail || isVideo(file.extension),
     async (file, isBroken, mounted, thumbnailPath, useThumbnail) => {
       // If it is broken, only show thumbnail if it exists.
       if (!mounted || isBroken === true) {
@@ -153,15 +155,32 @@ export const Thumbnail = observer(({ file, mounted, forceNoThumbnail }: ItemProp
   } else if (imageSource.tag === 'ready') {
     if ('ok' in imageSource.value) {
       const is_lowres = file.width < 320 || file.height < 320;
+      const style: React.CSSProperties =
+        is_lowres && uiStore.upscaleMode == 'pixelated' ? { imageRendering: 'pixelated' } : {};
+      // Like gifs, videos play silently on a loop in the gallery, with the thumbnail shown until loaded
+      if (isVideo(file.extension) && !isBroken) {
+        return (
+          <video
+            src={encodeFilePath(file.absolutePath)}
+            poster={encodeFilePath(imageSource.value.ok)}
+            data-file-id={file.id}
+            onError={handleImageError}
+            style={style}
+            autoPlay
+            muted
+            loop
+            playsInline
+            disablePictureInPicture
+          />
+        );
+      }
       return (
         <img
           src={encodeFilePath(imageSource.value.ok)}
           alt=""
           data-file-id={file.id}
           onError={handleImageError}
-          style={
-            is_lowres && uiStore.upscaleMode == 'pixelated' ? { imageRendering: 'pixelated' } : {}
-          }
+          style={style}
         />
       );
     } else {
